@@ -1,95 +1,154 @@
 import { Room, type Client } from "colyseus";
 import {
-  MAP_HEIGHT,
-  MAP_WIDTH,
+  ENEMY_KINDS,
+  MAX_ENEMIES,
   MAX_PLAYERS,
   RECONNECT_SECONDS,
   TICK_MS,
   normalizeInput,
   sanitizeHeroClass,
   sanitizeName,
-  stepPlayer,
-  type MoveMessage,
 } from "@isekai/shared";
-import { LevelState, Player } from "../state";
+import { World } from "../sim/world";
+import { Enemy, LevelState, Player, Projectile } from "../state";
 
-/** Separación entre los puntos de aparición, alrededor del centro del mapa. */
-const SPAWN_OFFSET = 40;
-const SPAWN_SLOTS = [
-  { x: -SPAWN_OFFSET, y: 0 },
-  { x: SPAWN_OFFSET, y: 0 },
-  { x: 0, y: -SPAWN_OFFSET },
-  { x: 0, y: SPAWN_OFFSET },
-];
+/** Las herramientas de depuración no existen en el servidor publicado. */
+const DEBUG = process.env.NODE_ENV !== "production";
 
+/**
+ * Sala de una partida. La simulación vive en `World`; la sala traduce los
+ * mensajes de los clientes, hace avanzar el mundo 20 veces por segundo y
+ * copia el resultado al estado que Colyseus sincroniza.
+ */
 export class LevelRoom extends Room<{ state: LevelState }> {
   maxClients = MAX_PLAYERS;
   state = new LevelState();
-
-  /** Dirección actual de cada jugador. No se sincroniza: solo la usa el servidor. */
-  private moves = new Map<string, MoveMessage>();
-  /** Qué punto de aparición ocupa cada jugador. */
-  private spawnSlots = new Map<string, number>();
+  readonly world = new World();
 
   messages = {
     move: (client: Client, payload: unknown) => {
-      const player = this.state.players.get(client.sessionId);
-      if (!player || !player.connected) return;
-      this.moves.set(client.sessionId, normalizeInput(payload));
+      this.world.setInput(client.sessionId, normalizeInput(payload));
+    },
+    restart: () => {
+      if (this.world.phase !== "defeat") return;
+      this.world.restart();
+      this.syncState();
+    },
+    "debug:fill": () => {
+      if (!DEBUG) return;
+      this.fillWithEnemies();
+      this.syncState();
     },
   };
 
   onCreate(): void {
+    this.state.phase = this.world.phase;
     this.setTimestep(() => this.tick(), TICK_MS);
   }
 
   onJoin(client: Client, options: unknown): void {
     const opts = (typeof options === "object" && options !== null ? options : {}) as Record<string, unknown>;
-    const slot = this.freeSlot();
-    this.spawnSlots.set(client.sessionId, slot);
-
-    const player = new Player();
-    player.name = sanitizeName(opts.name);
-    player.heroClass = sanitizeHeroClass(opts.heroClass);
-    player.x = MAP_WIDTH / 2 + SPAWN_SLOTS[slot].x;
-    player.y = MAP_HEIGHT / 2 + SPAWN_SLOTS[slot].y;
-    player.connected = true;
-    this.state.players.set(client.sessionId, player);
+    this.world.addPlayer(client.sessionId, sanitizeName(opts.name), sanitizeHeroClass(opts.heroClass));
+    this.syncState();
   }
 
   onDrop(client: Client): void {
-    const player = this.state.players.get(client.sessionId);
-    if (player) player.connected = false;
-    this.moves.delete(client.sessionId);
+    this.world.setConnected(client.sessionId, false);
+    this.syncState();
     this.allowReconnection(client, RECONNECT_SECONDS);
   }
 
   onReconnect(client: Client): void {
-    const player = this.state.players.get(client.sessionId);
-    if (player) player.connected = true;
+    this.world.setConnected(client.sessionId, true);
+    this.syncState();
   }
 
   onLeave(client: Client): void {
-    this.state.players.delete(client.sessionId);
-    this.moves.delete(client.sessionId);
-    this.spawnSlots.delete(client.sessionId);
-  }
-
-  private freeSlot(): number {
-    const used = new Set(this.spawnSlots.values());
-    for (let i = 0; i < SPAWN_SLOTS.length; i++) if (!used.has(i)) return i;
-    return 0;
+    this.world.removePlayer(client.sessionId);
+    this.syncState();
   }
 
   private tick(): void {
-    const dt = TICK_MS / 1000;
-    this.moves.forEach((input, sessionId) => {
-      if (input.dx === 0 && input.dy === 0) return;
-      const player = this.state.players.get(sessionId);
-      if (!player || !player.connected) return;
-      const next = stepPlayer(player, input, dt);
-      player.x = next.x;
-      player.y = next.y;
+    // Sin nadie conectado, la partida espera.
+    let anyoneConnected = false;
+    for (const player of this.world.players.values()) anyoneConnected ||= player.connected;
+    if (!anyoneConnected) return;
+
+    const events = this.world.step(TICK_MS);
+    this.syncState();
+    if (events.length > 0) this.broadcast("fx", events);
+  }
+
+  /** Copia el mundo al estado sincronizado. Solo se escribe lo que cambió. */
+  private syncState(): void {
+    const { world, state } = this;
+    if (state.phase !== world.phase) state.phase = world.phase;
+
+    for (const sim of world.players.values()) {
+      let player = state.players.get(sim.id);
+      if (!player) {
+        player = new Player();
+        player.name = sim.name;
+        player.heroClass = sim.heroClass;
+        state.players.set(sim.id, player);
+      }
+      if (player.x !== sim.x) player.x = sim.x;
+      if (player.y !== sim.y) player.y = sim.y;
+      if (player.connected !== sim.connected) player.connected = sim.connected;
+      if (player.hp !== sim.hp) player.hp = sim.hp;
+      if (player.maxHp !== sim.maxHp) player.maxHp = sim.maxHp;
+      if (player.downed !== sim.downed) player.downed = sim.downed;
+      const progress = Math.round(sim.reviveProgress * 100) / 100;
+      if (player.reviveProgress !== progress) player.reviveProgress = progress;
+    }
+    state.players.forEach((_player, id) => {
+      if (!world.players.has(id)) state.players.delete(id);
     });
+
+    for (const sim of world.enemies.values()) {
+      let enemy = state.enemies.get(sim.id);
+      if (!enemy) {
+        enemy = new Enemy();
+        enemy.kind = sim.kind;
+        state.enemies.set(sim.id, enemy);
+      }
+      const x = Math.round(sim.x);
+      const y = Math.round(sim.y);
+      const hp = Math.round(sim.hp);
+      if (enemy.x !== x) enemy.x = x;
+      if (enemy.y !== y) enemy.y = y;
+      if (enemy.hp !== hp) enemy.hp = hp;
+    }
+    state.enemies.forEach((_enemy, id) => {
+      if (!world.enemies.has(id)) state.enemies.delete(id);
+    });
+
+    for (const sim of world.projectiles.values()) {
+      let projectile = state.projectiles.get(sim.id);
+      if (!projectile) {
+        projectile = new Projectile();
+        state.projectiles.set(sim.id, projectile);
+      }
+      const x = Math.round(sim.x);
+      const y = Math.round(sim.y);
+      if (projectile.x !== x) projectile.x = x;
+      if (projectile.y !== y) projectile.y = y;
+    }
+    state.projectiles.forEach((_projectile, id) => {
+      if (!world.projectiles.has(id)) state.projectiles.delete(id);
+    });
+  }
+
+  /** Depuración: llena la sala hasta el máximo de enemigos, alrededor de los jugadores. */
+  private fillWithEnemies(): void {
+    const players = [...this.world.players.values()];
+    if (players.length === 0) return;
+    while (this.world.enemies.size < MAX_ENEMIES) {
+      const anchor = players[Math.floor(Math.random() * players.length)];
+      const angle = Math.random() * Math.PI * 2;
+      const reach = 150 + Math.random() * 250;
+      const kind = ENEMY_KINDS[Math.floor(Math.random() * ENEMY_KINDS.length)];
+      this.world.spawnEnemy(kind, anchor.x + Math.cos(angle) * reach, anchor.y + Math.sin(angle) * reach);
+    }
   }
 }
