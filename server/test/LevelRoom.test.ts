@@ -141,4 +141,9 @@ describe("LevelRoom", () => {
     const res = await colyseus.http.get("/health");
     expect(res.data).toBe("ok");
   });
+
+  it("GET /health permite consultas desde otro dominio", async () => {
+    const res = await colyseus.http.get("/health");
+    expect(res.headers["access-control-allow-origin"]).toBe("*");
+  });
 });

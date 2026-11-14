@@ -1,0 +1,14 @@
+# Servidor de partidas en Render (plan gratuito).
+# El plan gratuito se duerme tras 15 minutos sin tráfico; el juego lo avisa al entrar.
+services:
+  - type: web
+    name: isekai-squad-server
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm run start -w server
+    healthCheckPath: /health
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_VERSION
+        value: 24
