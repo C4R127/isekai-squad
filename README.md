@@ -2,7 +2,9 @@
 
 Juego web de acción cooperativa en pixel art: hasta 4 amigos reencarnan en un mundo de fantasía y sobreviven hordas de enemigos. Se juega desde el navegador, en PC o celular, entrando con un link de invitación.
 
-**Estado:** etapa 1 (esqueleto). Por ahora puedes crear una sala, compartir el link y moverte con tus amigos por el mapa. El diseño completo está en [docs/2026-11-14-isekai-squad-design.md](docs/2026-11-14-isekai-squad-design.md).
+**Jugar:** <https://c4r127.github.io/isekai-squad/> (si nadie ha jugado en un rato, el servidor tarda cerca de un minuto en despertar).
+
+**Estado:** etapa 2 (publicado). Por ahora puedes crear una sala, compartir el link y moverte con tus amigos por el mapa. El diseño completo está en [docs/2026-11-14-isekai-squad-design.md](docs/2026-11-14-isekai-squad-design.md).
 
 ## Requisitos
 
@@ -41,7 +43,7 @@ npm run typecheck
 El juego se publica gratis en dos partes:
 
 - **Cliente → GitHub Pages.** Cada cambio que llega a `main` ejecuta el flujo "Publicar" (`.github/workflows/pages.yml`): corre las pruebas, compila el cliente y lo publica. También se puede lanzar a mano desde la pestaña **Actions**.
-- **Servidor → Render (plan gratuito).** Está descrito en `render.yaml`; Render lo vuelve a desplegar con cada cambio en `main`.
+- **Servidor → Render (plan gratuito)**, en `https://isekai-squad-server.onrender.com`. Está descrito en `render.yaml`; Render lo vuelve a desplegar con cada cambio en `main`.
 
 El cliente sabe dónde está el servidor por la variable `VITE_SERVER_URL`, que se define en GitHub: **Settings → Secrets and variables → Actions → Variables**. Si falta, la publicación falla a propósito.
 
