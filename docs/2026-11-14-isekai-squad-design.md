@@ -181,7 +181,7 @@ Se incluirá una **guía de arte** (`docs/guia-de-arte.md`) con estos detalles y
 4. **Progresión:** experiencia, mejoras, 5 oleadas, jefe, victoria y derrota.
 5. **Celular:** joystick, escalado, interfaz táctil y aviso de girar el teléfono.
 6. **Meta:** mapa del mundo, progreso guardado, pantalla de resultados.
-7. **Arte:** integrar tus sprites a medida que los termines (se puede hacer en paralelo desde la etapa 2).
+7. **Arte:** integrar tus sprites a medida que los termines (se puede hacer en paralelo desde la etapa 3).
 
 ## 12. Lo que se deja a criterio de quien lo construya
 - Números exactos de balance (vida, daño, velocidades), siempre que vivan en `shared/balance` y se puedan ajustar fácilmente.
