@@ -10,5 +10,8 @@ services:
     healthCheckPath: /health
     autoDeployTrigger: commit
     envVars:
+      # Modo producción: desactiva los mensajes de depuración del servidor.
+      - key: NODE_ENV
+        value: production
       - key: NODE_VERSION
         value: 24
