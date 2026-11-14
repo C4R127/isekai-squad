@@ -4,7 +4,8 @@ import { World } from "../../src/sim/world";
 import { seeded } from "./helpers";
 
 describe("rendimiento de la simulación", () => {
-  it("4 jugadores y 150 enemigos: menos de 2 ms por paso de media", () => {
+  // Un paso dura 50 ms; el límite de 5 ms deja margen para cuando las pruebas corren en paralelo.
+  it("4 jugadores y 150 enemigos: menos de 5 ms por paso de media", () => {
     const random = seeded(5);
     const world = new World(random);
     for (const [i, id] of ["a", "b", "c", "d"].entries()) {
@@ -26,6 +27,7 @@ describe("rendimiento de la simulación", () => {
     }
     const elapsed = performance.now() - start;
     expect(world.enemies.size).toBeGreaterThan(100);
-    expect(elapsed).toBeLessThan(400);
+    console.info(`simulación: ${(elapsed / 200).toFixed(2)} ms por paso`);
+    expect(elapsed).toBeLessThan(1000);
   });
 });

@@ -1,36 +1,41 @@
 import * as Phaser from "phaser";
 import type { Room } from "@colyseus/sdk";
-import {
-  GAME_HEIGHT,
-  GAME_WIDTH,
-  MAP_HEIGHT,
-  MAP_WIDTH,
-  MAX_PLAYERS,
-  PLAYER_SIZE,
-  stepPlayer,
-  type MoveMessage,
-  type Vec2,
-} from "@isekai/shared";
+import { MAP_HEIGHT, MAP_WIDTH, type MoveMessage } from "@isekai/shared";
 import { buildInviteUrl } from "../invite";
-import { inputFromKeys, interpolate, reconcile, sameInput } from "../motion";
-import { button, label } from "../ui";
+import { inputFromKeys, sameInput } from "../motion";
+import {
+  PlayerViews,
+  createEnemyViews,
+  createProjectileViews,
+  type EnemyData,
+  type MobViews,
+  type PlayerData,
+  type ProjectileData,
+  type Synced,
+} from "../view/entities";
+import { playFx, type FxEvent } from "../view/fx";
+import { Hud } from "../view/hud";
 
-/** Lo que el servidor sincroniza de cada jugador. */
-type PlayerData = { name: string; heroClass: string; x: number; y: number; connected: boolean };
-type PlayerView = { body: Phaser.GameObjects.Rectangle; name: Phaser.GameObjects.Text; pos: Vec2 };
-
-const HERO_COLORS: Record<string, number> = { guerrero: 0xd9534f, maga: 0x5b6ee1 };
 const TILE = 16;
 /** Código con el que el servidor confirma una salida voluntaria. */
 const CLOSE_CONSENTED = 4000;
+const STILL: MoveMessage = { dx: 0, dy: 0 };
+
+type GameState = {
+  players: Synced<PlayerData> & { get(id: string): PlayerData | undefined };
+  enemies: Synced<EnemyData>;
+  projectiles: Synced<ProjectileData>;
+  phase: string;
+};
 
 export class GameScene extends Phaser.Scene {
   private room!: Room;
-  private views = new Map<string, PlayerView>();
   private keys!: Record<"W" | "A" | "S" | "D" | "UP" | "LEFT" | "DOWN" | "RIGHT", Phaser.Input.Keyboard.Key>;
-  private lastSent: MoveMessage = { dx: 0, dy: 0 };
-  private countText!: Phaser.GameObjects.Text;
-  private banner: Phaser.GameObjects.Text | null = null;
+  private lastSent: MoveMessage = STILL;
+  private players!: PlayerViews;
+  private enemies!: MobViews<EnemyData>;
+  private projectiles!: MobViews<ProjectileData>;
+  private hud!: Hud;
 
   constructor() {
     super("Game");
@@ -38,16 +43,37 @@ export class GameScene extends Phaser.Scene {
 
   init(data: { room: Room }): void {
     this.room = data.room;
-    this.views = new Map();
-    this.lastSent = { dx: 0, dy: 0 };
-    this.banner = null;
+    this.lastSent = STILL;
   }
 
   create(): void {
     this.drawMap();
     this.cameras.main.setBounds(0, 0, MAP_WIDTH, MAP_HEIGHT).setRoundPixels(true);
-    this.keys = this.input.keyboard!.addKeys("W,A,S,D,UP,LEFT,DOWN,RIGHT") as typeof this.keys;
-    this.createHud();
+    const keyboard = this.input.keyboard!;
+    this.keys = keyboard.addKeys("W,A,S,D,UP,LEFT,DOWN,RIGHT") as typeof this.keys;
+
+    this.players = new PlayerViews(this, this.room.sessionId);
+    this.enemies = createEnemyViews(this);
+    this.projectiles = createProjectileViews(this);
+    this.hud = new Hud(
+      this,
+      this.room.sessionId,
+      () => this.room.send("restart"),
+      (copyButton) => void this.copyInvite(copyButton),
+    );
+
+    keyboard.on("keydown-ENTER", () => {
+      if (this.hud.isDefeatShown()) this.room.send("restart");
+    });
+    if (import.meta.env.DEV) {
+      // Depuración: F9 llena la sala de enemigos para medir el rendimiento.
+      keyboard.on("keydown-F9", () => this.room.send("debug:fill"));
+    }
+
+    this.room.onMessage("fx", (events: FxEvent[]) => {
+      if (!Array.isArray(events)) return;
+      for (const event of events) playFx(this, event, (id) => this.players.position(id));
+    });
 
     // Al cambiar de pestaña o de ventana el personaje se detiene, en vez de seguir caminando solo.
     this.game.events.on(Phaser.Core.Events.BLUR, this.stopMoving, this);
@@ -55,89 +81,52 @@ export class GameScene extends Phaser.Scene {
       this.game.events.off(Phaser.Core.Events.BLUR, this.stopMoving, this);
     });
 
-    this.room.onDrop(() => this.showBanner("Reconectando…"));
+    this.room.onDrop(() => this.hud.showBanner("Reconectando…"));
     this.room.onReconnect(() => {
-      this.hideBanner();
+      this.hud.hideBanner();
       // El servidor olvidó la dirección al caerse la conexión: se reenvía.
-      this.lastSent = { dx: 0, dy: 0 };
+      this.lastSent = STILL;
     });
     this.room.onLeave((code: number) => {
       if (code === CLOSE_CONSENTED) return;
-      this.showBanner("Se perdió la conexión.");
-      button(this, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 24, "Volver a entrar", () => location.reload())
-        .setOrigin(0.5)
-        .setScrollFactor(0)
-        .setDepth(1001);
+      this.hud.showBanner("Se perdió la conexión.", { text: "Volver a entrar", onClick: () => location.reload() });
     });
   }
 
   update(_time: number, delta: number): void {
-    const players = this.room.state?.players as
-      | { forEach(cb: (p: PlayerData, id: string) => void): void; size: number }
-      | undefined;
-    if (!players) return;
+    const state = this.room.state as GameState | undefined;
+    if (!state?.players) return;
 
-    const input = inputFromKeys({
-      left: this.keys.A.isDown || this.keys.LEFT.isDown,
-      right: this.keys.D.isDown || this.keys.RIGHT.isDown,
-      up: this.keys.W.isDown || this.keys.UP.isDown,
-      down: this.keys.S.isDown || this.keys.DOWN.isDown,
-    });
+    const me = state.players.get(this.room.sessionId);
+    const canMove = state.phase === "playing" && !!me && !me.downed;
+    const input = canMove
+      ? inputFromKeys({
+          left: this.keys.A.isDown || this.keys.LEFT.isDown,
+          right: this.keys.D.isDown || this.keys.RIGHT.isDown,
+          up: this.keys.W.isDown || this.keys.UP.isDown,
+          down: this.keys.S.isDown || this.keys.DOWN.isDown,
+        })
+      : STILL;
     if (!sameInput(input, this.lastSent)) {
       this.room.send("move", input);
       this.lastSent = input;
     }
 
-    const seen = new Set<string>();
-    players.forEach((data, id) => {
-      seen.add(id);
-      const isMe = id === this.room.sessionId;
-      const view = this.views.get(id) ?? this.createView(id, data, isMe);
-
-      if (isMe) {
-        // Predicción: me muevo al instante y me corrijo hacia lo que diga el servidor.
-        const predicted = stepPlayer(view.pos, input, delta / 1000);
-        view.pos = reconcile(predicted, data, delta);
-      } else {
-        view.pos = interpolate(view.pos, data, delta);
-      }
-
-      view.body.setPosition(view.pos.x, view.pos.y).setAlpha(data.connected ? 1 : 0.4);
-      view.name.setPosition(view.pos.x, view.pos.y - PLAYER_SIZE / 2 - 2).setAlpha(data.connected ? 1 : 0.4);
-      if (view.name.text !== data.name) view.name.setText(data.name);
-    });
-
-    this.views.forEach((view, id) => {
-      if (seen.has(id)) return;
-      view.body.destroy();
-      view.name.destroy();
-      this.views.delete(id);
-    });
-
-    this.countText.setText(`Jugadores: ${players.size}/${MAX_PLAYERS}`);
+    this.players.sync(state.players, input, delta);
+    if (state.enemies) this.enemies.sync(state.enemies, delta);
+    if (state.projectiles) this.projectiles.sync(state.projectiles, delta);
+    this.hud.update(state.players, state.phase);
   }
 
   private stopMoving(): void {
     this.input.keyboard?.resetKeys();
-    if (sameInput(this.lastSent, { dx: 0, dy: 0 })) return;
-    this.lastSent = { dx: 0, dy: 0 };
+    if (sameInput(this.lastSent, STILL)) return;
+    this.lastSent = STILL;
     try {
-      this.room.send("move", this.lastSent);
+      this.room.send("move", STILL);
     } catch {
       // Sin conexión: el servidor ya detuvo al personaje al caerse.
     }
-  }
-
-  private createView(id: string, data: PlayerData, isMe: boolean): PlayerView {
-    const body = this.add
-      .rectangle(data.x, data.y, PLAYER_SIZE, PLAYER_SIZE, HERO_COLORS[data.heroClass] ?? HERO_COLORS.guerrero)
-      .setDepth(isMe ? 11 : 10);
-    if (isMe) body.setStrokeStyle(2, 0xffffff);
-    const name = label(this, data.x, data.y, data.name).setOrigin(0.5, 1).setDepth(20);
-    const view: PlayerView = { body, name, pos: { x: data.x, y: data.y } };
-    this.views.set(id, view);
-    if (isMe) this.cameras.main.startFollow(body, true);
-    return view;
   }
 
   private drawMap(): void {
@@ -147,14 +136,6 @@ export class GameScene extends Phaser.Scene {
     for (let x = 0; x <= MAP_WIDTH; x += TILE) g.lineBetween(x, 0, x, MAP_HEIGHT);
     for (let y = 0; y <= MAP_HEIGHT; y += TILE) g.lineBetween(0, y, MAP_WIDTH, y);
     g.lineStyle(4, 0x14261a, 1).strokeRect(2, 2, MAP_WIDTH - 4, MAP_HEIGHT - 4);
-  }
-
-  private createHud(): void {
-    this.countText = label(this, 4, 4, "").setScrollFactor(0).setDepth(1000);
-    const copy = button(this, GAME_WIDTH - 4, 4, "Copiar link", () => void this.copyInvite(copy))
-      .setOrigin(1, 0)
-      .setScrollFactor(0)
-      .setDepth(1000);
   }
 
   private async copyInvite(copyButton: Phaser.GameObjects.Text): Promise<void> {
@@ -167,20 +148,5 @@ export class GameScene extends Phaser.Scene {
       // Sin portapapeles (pasa en HTTP por wifi): se muestra para copiarlo a mano.
       window.prompt("Copia este link y envíalo a tus amigos:", url);
     }
-  }
-
-  private showBanner(text: string): void {
-    this.hideBanner();
-    this.banner = label(this, GAME_WIDTH / 2, GAME_HEIGHT / 2, text)
-      .setOrigin(0.5)
-      .setPadding(8, 6, 8, 6)
-      .setBackgroundColor("#000000")
-      .setScrollFactor(0)
-      .setDepth(1001);
-  }
-
-  private hideBanner(): void {
-    this.banner?.destroy();
-    this.banner = null;
   }
 }

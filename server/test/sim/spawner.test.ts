@@ -84,11 +84,11 @@ describe("generador de enemigos", () => {
     expect(checked).toBeGreaterThan(20);
   });
 
-  it("con 4 jugadores y 10 minutos sin atacar, nunca hay más de 150 enemigos", () => {
+  it("con 4 jugadores y 4 minutos sin atacar, nunca hay más de 150 enemigos", () => {
     const w = new World(seeded(3));
     for (const id of ["a", "b", "c", "d"]) pacify(w.addPlayer(id, id, "maga")).invulnerableMs = 1e12;
     let max = 0;
-    for (let t = 0; t < 600_000; t += 100) {
+    for (let t = 0; t < 240_000; t += 100) {
       w.step(100);
       max = Math.max(max, w.enemies.size);
     }

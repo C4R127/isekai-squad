@@ -15,6 +15,9 @@ const game = new Phaser.Game({
   scene: [BootScene, GameScene],
 });
 
+// Solo en desarrollo: acceso al juego desde la consola, para medir y depurar.
+if (import.meta.env.DEV) (window as unknown as { __game: Phaser.Game }).__game = game;
+
 /** Ajusta el tamaño del lienzo al zoom entero más grande que cabe en la pantalla. */
 function applyZoom(): void {
   const dpr = window.devicePixelRatio || 1;

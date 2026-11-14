@@ -1,8 +1,9 @@
 import * as Phaser from "phaser";
-import { GAME_HEIGHT, GAME_WIDTH } from "@isekai/shared";
+import { GAME_HEIGHT, GAME_WIDTH, type HeroClass } from "@isekai/shared";
 import { buildInviteUrl, readRoomId } from "../invite";
 import { connect, serverUrl } from "../net";
-import { loadName } from "../profile";
+import { loadHeroClass, loadName, saveHeroClass } from "../profile";
+import { heroColor } from "../view/colors";
 import { button, label } from "../ui";
 import { pingHealth, waitForServer, WAKE_NOTICE_MS, WAKE_TIMEOUT_MS } from "../wake";
 
@@ -64,9 +65,13 @@ export class BootScene extends Phaser.Scene {
       return;
     }
 
+    const heroClass = await this.chooseClass();
+    saveHeroClass(heroClass);
+    this.clear();
+
     label(this, CX, CY, "Conectando…").setOrigin(0.5);
     try {
-      const room = await connect(roomId, { name: loadName(), heroClass: "guerrero" });
+      const room = await connect(roomId, { name: loadName(), heroClass });
       history.replaceState(null, "", buildInviteUrl(location.href, room.roomId));
       this.scene.start("Game", { room });
     } catch (error) {
@@ -83,6 +88,40 @@ export class BootScene extends Phaser.Scene {
         button(this, CX, CY + 20, "Reintentar", () => void this.enter(null)).setOrigin(0.5);
       }
     }
+  }
+
+  /** Pantalla "Elige tu clase": dos tarjetas, con la última usada resaltada. */
+  private chooseClass(): Promise<HeroClass> {
+    const options: Array<{ heroClass: HeroClass; title: string; text: string; key: string }> = [
+      { heroClass: "guerrero", title: "1 · Guerrero", text: "Cuerpo a cuerpo y resistente. Corta en arco hacia donde camina.", key: "ONE" },
+      { heroClass: "maga", title: "2 · Maga", text: "A distancia y frágil. Lanza orbes que buscan al enemigo.", key: "TWO" },
+    ];
+    const last = loadHeroClass();
+
+    return new Promise((resolve) => {
+      const keyboard = this.input.keyboard;
+      const pick = (heroClass: HeroClass) => {
+        for (const option of options) keyboard?.off(`keydown-${option.key}`);
+        resolve(heroClass);
+      };
+
+      label(this, CX, 40, "Elige tu clase").setOrigin(0.5).setFontSize("16px");
+      options.forEach((option, index) => {
+        const x = CX + (index === 0 ? -100 : 100);
+        const card = this.add
+          .rectangle(x, CY + 10, 170, 130, 0x24382a)
+          .setStrokeStyle(option.heroClass === last ? 2 : 1, option.heroClass === last ? 0xffffff : 0x588157)
+          .setInteractive({ useHandCursor: true });
+        card.on("pointerover", () => card.setFillStyle(0x2f4a37));
+        card.on("pointerout", () => card.setFillStyle(0x24382a));
+        card.on("pointerdown", () => pick(option.heroClass));
+        this.add.rectangle(x, CY - 22, 32, 32, heroColor(option.heroClass));
+        label(this, x, CY + 8, option.title).setOrigin(0.5);
+        label(this, x, CY + 38, option.text, "#cccccc").setOrigin(0.5).setWordWrapWidth(156);
+        keyboard?.once(`keydown-${option.key}`, () => pick(option.heroClass));
+      });
+      label(this, CX, GAME_HEIGHT - 24, "Toca una tarjeta o pulsa 1 o 2", "#cccccc").setOrigin(0.5);
+    });
   }
 
   /** Pantalla de espera: el servidor gratuito se duerme cuando nadie juega. */
