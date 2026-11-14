@@ -13,6 +13,8 @@ import { activePlayers, type EnemySim, type World } from "./world";
 /** Los enemigos se solapan un poco antes de empujarse, para que la horda se vea compacta. */
 const SEPARATION_FACTOR = 0.8;
 const SEPARATION_STRENGTH = 0.5;
+/** Fracción de la distancia de contacto a la que un enemigo deja de acercarse. */
+const STOP_FACTOR = 0.75;
 
 /** Cada enemigo persigue al jugador activo más cercano. */
 export function stepEnemyMovement(world: World, dtMs: number): void {
@@ -25,7 +27,7 @@ export function stepEnemyMovement(world: World, dtMs: number): void {
     const target = nearest(enemy, players);
     if (!target) continue;
     const gap = distance(enemy, target);
-    if (gap < 1) continue;
+    if (gap === 0) continue;
 
     let dirX = (target.x - enemy.x) / gap;
     let dirY = (target.y - enemy.y) / gap;
@@ -38,7 +40,9 @@ export function stepEnemyMovement(world: World, dtMs: number): void {
       dirX = swayX / length;
       dirY = swayY / length;
     }
-    const stride = Math.min(ENEMIES[enemy.kind].speed * dt, gap);
+    // Se detienen al tocar al jugador, en vez de meterse dentro de él: así lo rodean.
+    const stopGap = ((ENEMIES[enemy.kind].size + PLAYER_SIZE) / 2) * STOP_FACTOR;
+    const stride = Math.min(ENEMIES[enemy.kind].speed * dt, Math.max(0, gap - stopGap));
     enemy.x += dirX * stride;
     enemy.y += dirY * stride;
   }
