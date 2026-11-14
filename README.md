@@ -36,6 +36,17 @@ npm test
 npm run typecheck
 ```
 
+## Publicación
+
+El juego se publica gratis en dos partes:
+
+- **Cliente → GitHub Pages.** Cada cambio que llega a `main` ejecuta el flujo "Publicar" (`.github/workflows/pages.yml`): corre las pruebas, compila el cliente y lo publica. También se puede lanzar a mano desde la pestaña **Actions**.
+- **Servidor → Render (plan gratuito).** Está descrito en `render.yaml`; Render lo vuelve a desplegar con cada cambio en `main`.
+
+El cliente sabe dónde está el servidor por la variable `VITE_SERVER_URL`, que se define en GitHub: **Settings → Secrets and variables → Actions → Variables**. Si falta, la publicación falla a propósito.
+
+El servidor gratuito se duerme tras 15 minutos sin jugadores y tarda cerca de un minuto en despertar. Mientras tanto el juego muestra "Despertando el portal mágico…"; al despertar, las salas anteriores ya no existen.
+
 ## Estructura
 
 | Carpeta | Qué contiene |
